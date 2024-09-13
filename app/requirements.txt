@@ -1,0 +1,9 @@
+langchain==0.2.16
+langchain_community==0.2.16
+langchain_core==0.2.38
+langgraph==0.2.16
+loguru==0.7.2
+python-dotenv==1.0.1
+typing_extensions==4.12.2
+neo4j==5.24.0
+pytz==2024.1
