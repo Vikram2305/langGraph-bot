@@ -29,8 +29,7 @@ from langgraph.graph.message import AnyMessage, add_messages
 import os
 
 LANGCHAIN_TRACING_V2="true"
-LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
-LANGCHAIN_API_KEY= "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"
+LANGCHAIN_API_KEY= os.getenv("LANGCHAIN_API_KEY")
 LANGCHAIN_PROJECT="LangGraph-Chatbot"
 
 def update_dialog_stack(left: list[str], right: Optional[str]) -> list[str]:
@@ -203,8 +202,8 @@ primary_assistant_prompt = ChatPromptTemplate.from_messages(
     ]
 ).partial(time=datetime.now(ist_timezone).isoformat())
 
-primary_assistant_tools = [customer_existence_verification]
-primary_assistant_runnable = primary_assistant_prompt | model.bind_tools(primary_assistant_tools +[Lead_assistant])
+# primary_assistant_tools = [customer_existence_verification]
+primary_assistant_runnable = primary_assistant_prompt | model.bind_tools([Lead_assistant])
 def pop_dialog_state(state: State) -> dict:
     """Pop the dialog stack and return to the main assistant.
 
@@ -245,7 +244,7 @@ builder.add_node(
 
 builder.add_node("primary_assistant", Assistant(primary_assistant_runnable))
 builder.add_edge(START, "primary_assistant")
-builder.add_node("primary_assistant_tools", create_tool_node_with_fallback(primary_assistant_tools))
+# builder.add_node("primary_assistant_tools", create_tool_node_with_fallback(primary_assistant_tools))
 builder.add_node("leave_skill", pop_dialog_state)
 builder.add_edge("leave_skill", "primary_assistant")
 # builder.add_edge("primary_assistant", "enter_lead_assistant")
@@ -288,7 +287,7 @@ def route_lead_assistant(
 def route_primary_assistant(
     state: State,
 ) -> Literal[
-    "primary_assistant_tools",
+    "primary_assistant",
     "enter_lead_assistant",
     "__end__",
 ]:
@@ -299,7 +298,7 @@ def route_primary_assistant(
     if tool_calls:
         if tool_calls[0]["name"] == Lead_assistant.__name__:
             return "enter_lead_assistant"
-        return "primary_assistant_tools"
+        return "primary_assistant"
     raise ValueError("Invalid route")
 
 
@@ -310,11 +309,11 @@ builder.add_conditional_edges(
     route_primary_assistant,
     {
         "enter_lead_assistant": "enter_lead_assistant",
-        "primary_assistant_tools": "primary_assistant_tools",
+        "primary_assistant": "primary_assistant",
         END: END,
     },
 )
-builder.add_edge("primary_assistant_tools", "primary_assistant")
+# builder.add_edge("primary_assistant_tools", "primary_assistant")
 
 def route_to_workflow(
     state: State,

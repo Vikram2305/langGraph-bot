@@ -10,82 +10,90 @@ graph = neo4j_connection()
 @tool
 def customer_existence_verification(name: str = None, email: str = None, phone: str = None, civil_id: str = None):
     """
-    Verify the existence of the Customer in our Database before lead creation.
-    
+    Verify the existence of the Customer in the database before lead creation.
+
     Parameters:
     - name: Customer's name (optional).
     - email: Customer's email (optional).
     - phone: Customer's phone (optional).
     - civil_id: Customer's civil ID (optional).
-    
+
     Returns:
     - Clear and actionable messages for the lead agent to understand the verification results.
-"""
-    def get_value(attributes):
-        return None if attributes is None or attributes.strip() == "" else attributes
+    """
 
+    def get_value(attr):
+        """Helper function to clean up attribute values."""
+        return None if attr is None or attr.strip() == "" else attr
+
+    # Clean inputs
     name = get_value(name)
     email = get_value(email)
     phone = get_value(phone)
     civil_id = get_value(civil_id)
-    def validation():
-        phone_validation = True
-        civil_validation = True
-        email_validation = True
 
+    if not name and not email and not phone and not civil_id:
+        # Ensure at least one parameter is provided
+        return "Error: At least one of name, email, phone, or civil ID is required to verify customer existence."
+
+    def validation():
+        """Validate the phone, email, and civil ID if provided."""
         if phone:
             phone_validation = validate_phone_number(phone)
             if phone_validation is not True:
                 return phone_validation
-        
+
         if civil_id:
             civil_validation = validate_civil_id(civil_id)
             if civil_validation is not True:
                 return civil_validation
-        
+
         if email:
             email_validation = validate_email_address(email)
             if email_validation is not True:
                 return email_validation
 
-        # If all validations pass, return True
-        return all([phone_validation, civil_validation, email_validation])
+        return True
 
     validated = validation()
 
     if validated == True:
-
         query = graph.query("""MATCH (c:Lead) RETURN c.name AS customer_name""")
-        names_list = [name for i in query for name in [i['customer_name']]]
+        names_list = [name['customer_name'] for name in query]
 
         def split_names(names):
-            return [name.split(' ', 1) if ' ' in name else name for name in names]
+            """Split full names into first and last for better matching."""
+            return [name.split(' ', 1) if ' ' in name else [name] for name in names]
 
         names_list = split_names(names_list)
-        def similar_names(user_name, names_list, threshold=0.86):
+
+        def find_similar_names(input_name, names_list, threshold=0.86):
+            """Find similar names in the database based on Jaro-Winkler similarity."""
             similar_names = []
             for name in names_list:
-                if isinstance(name, str):
-                    similarity = distance.get_jaro_distance(user_name, name)
-                    if similarity >= threshold:
-                        similar_names.append((name, similarity))
-                else:
-                    for i in name:
-                        similarity = distance.get_jaro_distance(user_name, i)
-                        if similarity >= threshold:
-                            similar_names.append((' '.join(name), similarity))
+                full_name = ' '.join(name) if isinstance(name, list) else name
+                similarity = distance.get_jaro_distance(input_name, full_name)
+                if similarity >= threshold:
+                    similar_names.append((full_name, similarity))
             return similar_names
 
-        if name and all(x is None for x in (phone, civil_id, email)):
-
-            name_result = similar_names(name, names_list, threshold=0.86)
-            print(name_result)
-            if name_result:
-                return f"The provided Name is associated with the following customer(s): {[i[0] for i in name_result]}. Would you like to proceed with one of these customers, or would you prefer to create a new lead?"        
+        if name and all(param is None for param in (phone, civil_id, email)):
+            # Verify only by name
+            name_matches = find_similar_names(name, names_list)
+            if name_matches:
+                matched_names = ', '.join([i[0] for i in name_matches])
+                return (
+                    f"The provided name is associated with the following customer(s): {matched_names}. "
+                    "Would you like to proceed with one of these customers, or create a new lead?"
+                )
             else:
-                return f"No matching results were found for the name '{name}'. Please review or confirm the provided details. Would you like to create a new lead instead?"
+                return (
+                    f"No matching results found for the name '{name}'. Please review or confirm the provided details. "
+                    "Would you like to create a new lead instead?"
+                )
 
         else:
+            # Create query with dynamic conditions based on provided data
             query = """
             MATCH (l:Lead)
             WHERE toLower(l.name) = toLower($name)
@@ -97,13 +105,15 @@ def customer_existence_verification(name: str = None, email: str = None, phone: 
                 conditions.append("l.civil_id = $civil_id")
             if email:
                 conditions.append("l.email = $email")
-            
+
             if conditions:
                 query += " AND " + " AND ".join(conditions)
 
             query += """
             RETURN l.name AS lead_name, l.phone_number AS phone_number, l.civil_id AS civil_id, l.email AS email, l.id AS lead_id
-            """        
+            """
+
+            # Run the query and check if a customer exists with the provided details
             verified_result = graph.query(query, {
                 'name': name,
                 'phone': phone,
@@ -112,12 +122,15 @@ def customer_existence_verification(name: str = None, email: str = None, phone: 
             })
 
             if verified_result:
-                return f"A customer named '{name}' already exists in our system with matching details (Phone: {verified_result[0]['phone_number']}, Email: {verified_result[0]['email']}, Civil ID: {verified_result[0]['civil_id']}). Would you like to proceed with this customer, or create a new lead?"
-            
-            else:        
+                customer_data = verified_result[0]
+                return (
+                    f"A customer named '{customer_data['lead_name']}' already exists in our system "
+                    f"with matching details (Phone: {customer_data['phone_number']}, Email: {customer_data['email']}, Civil ID: {customer_data['civil_id']}). "
+                    "Would you like to proceed with this customer, or create a new lead?"
+                )
+            else:
+                # Handle semi-verified results by running individual queries for each identifier
                 cypher_queries = []
-                semi_verified_result = []
-
                 if phone:
                     phone_query = """
                     MATCH (c:Lead)
@@ -142,6 +155,7 @@ def customer_existence_verification(name: str = None, email: str = None, phone: 
                     """
                     cypher_queries.append(("email", email_query))
 
+                # Run each individual query for partial verification
                 for query_type, query in cypher_queries:
                     db_result = graph.query(query, {
                         'name': name,
@@ -151,11 +165,21 @@ def customer_existence_verification(name: str = None, email: str = None, phone: 
                     })
 
                     if db_result:
-                        return f"I have identified that the {query_type} you provided is associated with {db_result[0]['customer_name']}. Could you please confirm or provide the correct {query_type} for {name}?"
+                        customer_data = db_result[0]
+                        return (
+                            f"I have identified that the {query_type} you provided is associated with "
+                            f"{customer_data['customer_name']}. Could you please confirm or provide the correct {query_type} "
+                            f"for {name}?"
+                        )
 
-                    else:
-                        return f"I was unable to locate the {query_type} ({phone if query_type == 'phone number' else civil_id if query_type == 'civil ID' else email}) in our system. Would you like to proceed with creating a new lead?"
-    else:return validated
+                return (
+                    "No matching records found for the provided details. "
+                    "Would you like to proceed with creating a new lead?"
+                )
+    else:
+        # Return the validation error message
+        return f"Validation Error: {validated}"
+
 
 @tool
 def customer_lead_creation(
