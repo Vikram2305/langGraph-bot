@@ -28,11 +28,6 @@ from typing_extensions import TypedDict
 from langgraph.graph.message import AnyMessage, add_messages
 import os
 
-LANGCHAIN_TRACING_V2="true"
-LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
-LANGCHAIN_API_KEY= "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"
-LANGCHAIN_PROJECT="LangGraph-Chatbot"
-
 def update_dialog_stack(left: list[str], right: Optional[str]) -> list[str]:
     """Push or pop the state."""
     if right is None:
