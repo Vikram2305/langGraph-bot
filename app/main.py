@@ -26,9 +26,12 @@ from langgraph.prebuilt import ToolNode
 from typing import Annotated, Literal, Optional
 from typing_extensions import TypedDict
 from langgraph.graph.message import AnyMessage, add_messages
+import os
 
-# Functions
-
+LANGCHAIN_TRACING_V2="true"
+LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
+LANGCHAIN_API_KEY= "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"
+LANGCHAIN_PROJECT="LangGraph-Chatbot"
 
 def update_dialog_stack(left: list[str], right: Optional[str]) -> list[str]:
     """Push or pop the state."""
@@ -158,11 +161,10 @@ class Lead_assistant(BaseModel):
         }
 
 
-
-
 def create_entry_node(assistant_name: str, new_dialog_state: str) -> Callable:
     def entry_node(state: State) -> dict:
         tool_call_id = state["messages"][-1].tool_calls[0]["id"]
+        print("this is tool call id", tool_call_id)
         return {
             "messages": [
                 ToolMessage(
@@ -180,7 +182,7 @@ def create_entry_node(assistant_name: str, new_dialog_state: str) -> Callable:
     return entry_node
 
 
-model = ChatGroq(model="llama3-70b-8192",temperature=0)
+model = ChatGroq(model="llama3-70b-8192",temperature=1)
 
 primary_assistant_prompt = ChatPromptTemplate.from_messages(
     [
@@ -201,8 +203,8 @@ primary_assistant_prompt = ChatPromptTemplate.from_messages(
     ]
 ).partial(time=datetime.now(ist_timezone).isoformat())
 
-
-primary_assistant_runnable = primary_assistant_prompt | model.bind_tools([Lead_assistant])
+primary_assistant_tools = [customer_existence_verification]
+primary_assistant_runnable = primary_assistant_prompt | model.bind_tools(primary_assistant_tools +[Lead_assistant])
 def pop_dialog_state(state: State) -> dict:
     """Pop the dialog stack and return to the main assistant.
 
@@ -218,6 +220,7 @@ def pop_dialog_state(state: State) -> dict:
                 tool_call_id=state["messages"][-1].tool_calls[0]["id"],
             )
         )
+    print(messages)
     return {
         "dialog_state": "pop",
         "messages": messages,
@@ -242,10 +245,10 @@ builder.add_node(
 
 builder.add_node("primary_assistant", Assistant(primary_assistant_runnable))
 builder.add_edge(START, "primary_assistant")
-
+builder.add_node("primary_assistant_tools", create_tool_node_with_fallback(primary_assistant_tools))
 builder.add_node("leave_skill", pop_dialog_state)
 builder.add_edge("leave_skill", "primary_assistant")
-builder.add_edge("primary_assistant", "enter_lead_assistant")
+# builder.add_edge("primary_assistant", "enter_lead_assistant")
 
 def route_lead_assistant(
     state: State,
@@ -256,16 +259,77 @@ def route_lead_assistant(
     "__end__",
 ]:
     route = tools_condition(state)
+    print("This is the route",route)
     if route == END:
         return END
     tool_calls = state["messages"][-1].tool_calls
     did_cancel = any(tc["name"] == CompleteOrEscalate.__name__ for tc in tool_calls)
+    
     if did_cancel:
+        print("This is the tool calls",tool_calls)
+        print("this is the name",CompleteOrEscalate.__name__)
         return "leave_skill"
+    
     safe_toolnames = [t.name for t in safe_tool]
     if all(tc["name"] in safe_toolnames for tc in tool_calls):
+        print("This is the safe tool names",safe_toolnames)
         return "lead_assistant_safe_tools"
-    return "lead_assistant_sensitive_tools"
+    
+    sensitive_toolnames = [t.name for t in sensitive_tool]
+    if all(tc["name"] in sensitive_toolnames for tc in tool_calls):
+        print("This is the sensitive tool names",sensitive_toolnames)
+        return "lead_assistant_sensitive_tools"
+
+    return END
+
+
+######################################################################################
+
+def route_primary_assistant(
+    state: State,
+) -> Literal[
+    "primary_assistant_tools",
+    "enter_lead_assistant",
+    "__end__",
+]:
+    route = tools_condition(state)
+    if route == END:
+        return END
+    tool_calls = state["messages"][-1].tool_calls
+    if tool_calls:
+        if tool_calls[0]["name"] == Lead_assistant.__name__:
+            return "enter_lead_assistant"
+        return "primary_assistant_tools"
+    raise ValueError("Invalid route")
+
+
+# The assistant can route to one of the delegated assistants,
+# directly use a tool, or directly respond to the user
+builder.add_conditional_edges(
+    "primary_assistant",
+    route_primary_assistant,
+    {
+        "enter_lead_assistant": "enter_lead_assistant",
+        "primary_assistant_tools": "primary_assistant_tools",
+        END: END,
+    },
+)
+builder.add_edge("primary_assistant_tools", "primary_assistant")
+
+def route_to_workflow(
+    state: State,
+) -> Literal[
+    "primary_assistant",
+    "lead_agent",
+]:
+    """If we are in a delegated state, route directly to the appropriate assistant."""
+    dialog_state = state.get("dialog_state")
+    if not dialog_state:
+        return "primary_assistant"
+    return dialog_state[-1]
+
+
+# builder.add_conditional_edges("fetch_user_info", route_to_workflow)
 
 builder.add_edge("lead_assistant_safe_tools", "lead_agent")
 builder.add_edge("lead_assistant_sensitive_tools", "lead_agent")
@@ -273,7 +337,7 @@ builder.add_conditional_edges("lead_agent",route_lead_assistant)
 
 # Compile graph
 memory = MemorySaver()
-part_4_graph = builder.compile(checkpointer=memory,interrupt_before=["lead_assistant_sensitive_tools"],)
+part_4_graph = builder.compile(checkpointer=memory,interrupt_before=["lead_assistant_sensitive_tools"]) #,
 
 part_4_graph.get_graph(xray=True).draw_mermaid_png(output_file_path="part_4_graph.png")
 
@@ -292,3 +356,4 @@ while True:
     )
     for event in events:
         _print_event(event, _printed)
+        # print(event)

@@ -20,7 +20,14 @@ def customer_existence_verification(name: str = None, email: str = None, phone: 
     
     Returns:
     - Clear and actionable messages for the lead agent to understand the verification results.
-    """
+"""
+    def get_value(attributes):
+        return None if attributes is None or attributes.strip() == "" else attributes
+
+    name = get_value(name)
+    email = get_value(email)
+    phone = get_value(phone)
+    civil_id = get_value(civil_id)
     def validation():
         phone_validation = True
         civil_validation = True
@@ -55,7 +62,7 @@ def customer_existence_verification(name: str = None, email: str = None, phone: 
             return [name.split(' ', 1) if ' ' in name else name for name in names]
 
         names_list = split_names(names_list)
-        def similar_names(user_name, names_list, threshold=0.7):
+        def similar_names(user_name, names_list, threshold=0.86):
             similar_names = []
             for name in names_list:
                 if isinstance(name, str):
@@ -71,7 +78,7 @@ def customer_existence_verification(name: str = None, email: str = None, phone: 
 
         if name and all(x is None for x in (phone, civil_id, email)):
 
-            name_result = similar_names(name, names_list, threshold=0.7)
+            name_result = similar_names(name, names_list, threshold=0.86)
             print(name_result)
             if name_result:
                 return f"The provided Name is associated with the following customer(s): {[i[0] for i in name_result]}. Would you like to proceed with one of these customers, or would you prefer to create a new lead?"        
