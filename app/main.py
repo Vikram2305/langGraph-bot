@@ -27,7 +27,7 @@ from typing import Annotated, Literal, Optional
 from typing_extensions import TypedDict
 from langgraph.graph.message import AnyMessage, add_messages
 
-
+# Functions
 
 
 def update_dialog_stack(left: list[str], right: Optional[str]) -> list[str]:
