@@ -180,7 +180,7 @@ def create_entry_node(assistant_name: str, new_dialog_state: str) -> Callable:
     return entry_node
 
 
-model = ChatGroq(model="llama-3.1-70b-versatile",temperature=0)
+model = ChatGroq(model="llama3-70b-8192",temperature=0)
 
 primary_assistant_prompt = ChatPromptTemplate.from_messages(
     [
@@ -273,7 +273,7 @@ builder.add_conditional_edges("lead_agent",route_lead_assistant)
 
 # Compile graph
 memory = MemorySaver()
-part_4_graph = builder.compile(checkpointer=memory,)
+part_4_graph = builder.compile(checkpointer=memory,interrupt_before=["lead_assistant_sensitive_tools"],)
 
 part_4_graph.get_graph(xray=True).draw_mermaid_png(output_file_path="part_4_graph.png")
 
