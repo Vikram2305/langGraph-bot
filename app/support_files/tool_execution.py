@@ -1,11 +1,13 @@
 from typing_extensions import Annotated, Optional
 from langchain_core.tools import tool
 from langchain_core.messages import ToolMessage
-from support_files.graph_connection import neo4j_connection
-from support_files.validation_functions import validate_email_address,validate_civil_id, validate_phone_number, _validate_customer_info
+from support_files.graph_connection import neo4j_connection, test_neo4j_connection
+from support_files.validation_functions import validate_email_address,validate_civil_id, validate_phone_number
 from support_files.cypher_queries import is_phone_number_exist_query, is_civil_id_exist_query, is_emaild_exist_query
 from pyjarowinkler import distance
 graph = neo4j_connection()
+test_graph = test_neo4j_connection()
+from datetime import datetime 
 
 @tool
 def customer_existence_verification(name: str = None, email: str = None, phone: str = None, civil_id: str = None):
@@ -24,7 +26,7 @@ def customer_existence_verification(name: str = None, email: str = None, phone: 
 
     def get_value(attr):
         """Helper function to clean up attribute values."""
-        return None if attr is None or attr.strip() == "" else attr
+        return None if attr is None or attr.strip() == "" or "unknown" in attr.strip() else attr
 
     # Clean inputs
     name = get_value(name)
@@ -182,51 +184,115 @@ def customer_existence_verification(name: str = None, email: str = None, phone: 
 
 
 @tool
-def customer_lead_creation(
-    customer_name: Annotated[str, "Customer name in lower case"],
-    customer_phone: Annotated[str, "Customer phone number in 10 digits"],
-    customer_civil: Annotated[str, "Customer civil status"],
-    customer_email: Annotated[str, "Customer email address"],
-) -> dict:
+def customer_lead_creation(name    : Annotated[str,"Customer name in lower case"],
+                           phone   : Annotated[str,"Customer phone number in 10 digits"],
+                           civil_id: Annotated[str,"Customer civil ID in 12 digits"],
+                           email   : Annotated[str,"Customer email address"],
+                           model   : Annotated[str,"Car model"],
+                           variant : Annotated[str,"Car variant"]) -> str:
     """
-    Creates a new customer lead by validating the provided customer information and checking for existing associations.
-    
+    Creates a lead and links it to a customer in the Neo4j database.
+
     Parameters:
-        customer_name (str): The customer's name in lower case. (mandatory)
-        customer_phone (str): The customer's phone number in digits.(mandatory)
-        customer_civil (str): The customer's civil status.(mandatory)
-        customer_email (str): The customer's email address.(mandatory)
+    - name: Customer's name (mandatory).
+    - phone: Customer's phone number (mandatory).
+    - civil_id: Customer's civil ID (mandatory).
+    - email: Customer's email (mandatory).
+    - model: The car model the customer is interested in (mandatory).
+    - variant: The car variant (mandatory).
 
     Returns:
-        dict: A dictionary containing the result of the lead creation process, including any error messages or a success status.
+    - A message confirming lead creation or an error message.
     """
-    # Validate customer information
-    validation_result = _validate_customer_info(
-        customer_phone=customer_phone,
-        customer_civil=customer_civil,
-        email=customer_email
-    )
     
-    if validation_result != "valid":
-        def check_existence(query: str, params: dict, identifier: str) -> str:
-            query_result = graph.query(query=query, params=params)
-            if query_result:
-                return f"This {identifier} already associated with {query_result[0]['corresponding_customer']}. Kindly provide your {identifier}"
-            return None
+    # Helper function to handle null/empty strings
+    def get_value(attr):
+        return None if attr is None or attr.strip() == "" else attr
 
-        # Check for existing phone number
-        phone_message = check_existence(is_phone_number_exist_query, {"phone_number": customer_phone}, customer_phone)
-        if phone_message:
-            return phone_message
+    # Check for missing parameters and prompt lead agent accordingly
+    missing_params = []
+    if not get_value(name):
+        missing_params.append("Name")
+    if not get_value(phone):
+        missing_params.append("Phone number")
+    if not get_value(civil_id):
+        missing_params.append("Civil ID")
+    if not get_value(email):
+        missing_params.append("Email address")
+    if not get_value(model):
+        missing_params.append("Model")
+    if not get_value(variant):
+        missing_params.append("Variant")
 
-        # Check for existing civil ID
-        civil_message = check_existence(is_civil_id_exist_query, {"civil_id": customer_civil}, customer_civil)
-        if civil_message:
-            return civil_message
+    if missing_params:
+        # Return a tool message asking the lead agent to prompt the user for missing details
+        return (
+            f"Error: Missing required details: {', '.join(missing_params)}. "
+            "Please ask the user to provide the missing information."
+        )
 
-        # Check for existing email
-        email_message = check_existence(is_emaild_exist_query, {"customer_email": customer_email}, customer_email)
-        if email_message:
-            return email_message
+    # Validate email, phone, and civil ID
+    if not validate_email_address(email):
+        return "Error: Invalid email address. Please provide a valid email."
+    if not validate_phone_number(phone):
+        return "Error: Invalid phone number. Please provide a valid phone number."
+    if not validate_civil_id(civil_id):
+        return "Error: Invalid civil ID. Please provide a valid civil ID."
 
-        return {"status": "Lead creation successful."}
+    # Proceed with creating the lead
+    query = """
+        MERGE (l:Customer {phone_number: $mobile})
+        ON CREATE SET l.createdAt = $createdAt,
+                      l.id = apoc.create.uuid()
+        SET l.name = $name,
+            l.email = $email,
+            l.model = $model,
+            l.variant = $variant,
+            l.civil_id = $civil_id
+        
+        WITH l
+        MERGE (c:Lead {id: l.id})
+        ON CREATE SET c.createdAt = $createdAt
+        SET c.name = $name, 
+            c.phone_number = $mobile, 
+            c.email = $email, 
+            c.model = $model,
+            c.variant = $variant,
+            c.level = "High"
+        MERGE (l)-[:CUSTOMER_OF_LEAD]->(c)
+        
+        WITH c
+        MATCH (m:Model {name: $model})
+        MERGE (c)-[:PREFERENCE]->(m)
+    """
+    
+    params = {
+        "name": name.capitalize(),
+        "mobile": phone,
+        "email": email,
+        "createdAt": datetime.now().isoformat(),
+        "variant": variant,
+        "model": model,
+        "civil_id": civil_id
+    }
+
+    try:
+        # Execute the query on the Neo4j database
+        test_graph.query(query, params)
+
+        # Return success message with lead details
+        return (
+            f"Lead successfully created for {name.capitalize()}.\n"
+            f"Customer Info:\n"
+            f"Name: {name.capitalize()}\n"
+            f"Phone: {phone}\n"
+            f"Email: {email}\n"
+            f"Model: {model} (Variant: {variant})\n"
+            f"Civil ID: {civil_id}\n"
+            f"Lead Level: High\n"
+            f"Created At: {params['createdAt']}"
+        )
+
+    except Exception as e:
+        # Catch any exceptions during the database operation and return an error message
+        return f"Error: Failed to create lead due to: {str(e)}."

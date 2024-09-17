@@ -146,7 +146,7 @@ class Lead_assistant(BaseModel):
     civilID: str = Field(description="Civil ID of the customer.")
 
     request: str = Field(
-        description="Any additional information or requests from the user regarding the create or udate or delete the lead."
+        description="Any additional information or requests from the user regarding the create or update or delete the lead."
     )
 
     class Config:
@@ -194,6 +194,7 @@ primary_assistant_prompt = ChatPromptTemplate.from_messages(
             "Only the specialized assistants are given permission to do this for the user."
             "The user is not aware of the different specialized assistants, so do not mention them; just quietly delegate through function calls. "
             "Provide detailed information to the customer, and always double-check the database before concluding that information is unavailable. "
+            "You should always provide the reply to the customer in the way of a concise, detailed, and informative message and don't use form like structure. "
             "When searching, be persistent. Expand your query bounds if the first search returns no results."
             "If a search comes up empty, expand your search before giving up."
             "\nCurrent time: {time}."
@@ -234,13 +235,11 @@ builder.add_edge("enter_lead_assistant", "lead_agent")
 
 builder.add_node(
     "lead_assistant_safe_tools",
-    create_tool_node_with_fallback(safe_tool)
-)
+    create_tool_node_with_fallback(safe_tool))
 
 builder.add_node(
     "lead_assistant_sensitive_tools",
-    create_tool_node_with_fallback(sensitive_tool)
-)
+    create_tool_node_with_fallback(sensitive_tool))
 
 builder.add_node("primary_assistant", Assistant(primary_assistant_runnable))
 builder.add_edge(START, "primary_assistant")
@@ -309,7 +308,7 @@ builder.add_conditional_edges(
     route_primary_assistant,
     {
         "enter_lead_assistant": "enter_lead_assistant",
-        "primary_assistant": "primary_assistant",
+        #"primary_assistant": "primary_assistant",
         END: END,
     },
 )
@@ -336,7 +335,7 @@ builder.add_conditional_edges("lead_agent",route_lead_assistant)
 
 # Compile graph
 memory = MemorySaver()
-part_4_graph = builder.compile(checkpointer=memory,interrupt_before=["lead_assistant_sensitive_tools"]) #,
+part_4_graph = builder.compile(checkpointer=memory) #,interrupt_before=["lead_assistant_sensitive_tools"]
 
 part_4_graph.get_graph(xray=True).draw_mermaid_png(output_file_path="part_4_graph.png")
 
